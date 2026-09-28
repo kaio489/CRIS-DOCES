@@ -593,14 +593,44 @@ addEventListener('scroll',onScroll,{passive:true});addEventListener('resize',onS
 
 /* admin */
 const CRED=['crisdoces','confeitaria'];
+const SUPA_URL='https://uuzdbfizpozdacygnzkj.supabase.co';
+const SUPA_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV1emRiZml6cG96ZGFjeWduemtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgyNjIyMzMsImV4cCI6MjEwMzgzODIzM30.aZMzQPD06GeNuXHpSlRzSl-vY6duhBr-jrwVUGd0kOE';
+let SESS_USER='',SESS_PASS='',remoteTs=null,syncing=false;
+async function fetchRemoteMenu(){
+  const r=await fetch(SUPA_URL+'/rest/v1/cris_menu?id=eq.1&select=data,updated_at',{headers:{apikey:SUPA_KEY,Authorization:'Bearer '+SUPA_KEY}});
+  if(!r.ok)throw new Error('http_'+r.status);
+  const rows=await r.json();
+  return rows&&rows[0]?rows[0]:null;
+}
+async function pushRemoteMenu(user,pass,data){
+  const r=await fetch(SUPA_URL+'/rest/v1/rpc/cris_publish_menu',{method:'POST',headers:{apikey:SUPA_KEY,Authorization:'Bearer '+SUPA_KEY,'Content-Type':'application/json',Prefer:'params=single-object'},body:JSON.stringify({p_user:user,p_pass:pass,p_data:data})});
+  if(!r.ok){const t=await r.text().catch(()=>'');throw new Error(t||('http_'+r.status))}
+  return r.json().catch(()=>null)
+}
+async function syncFromRemote(auto){
+  if(syncing||admin())return;syncing=true;
+  try{
+    const row=await fetchRemoteMenu();
+    if(row&&row.updated_at!==remoteTs){
+      remoteTs=row.updated_at;
+      state.cats=row.data.cats;state.items=row.data.items;
+      if(!state.cats.some(c=>c.id===cat))cat=state.cats[0].id;
+      render();typeof buildVit==='function'&&buildVit();typeof paintCart==='function'&&paintCart();
+      if(auto)toast('Cardápio atualizado')
+    }
+  }catch(e){/* offline ou bloqueado: mantém os dados já carregados */}
+  syncing=false
+}
 $('#openLogin').onclick=()=>{$('#le').textContent='';$('#dLogin').showModal()};
 $('#lok').onclick=()=>{
-  if($('#lu').value.trim().toLowerCase()===CRED[0]&&$('#lp').value.trim().toLowerCase()===CRED[1]){
+  const u=$('#lu').value.trim(),p=$('#lp').value.trim();
+  if(u.toLowerCase()===CRED[0]&&p.toLowerCase()===CRED[1]){
+    SESS_USER=u;SESS_PASS=p;
     $('#dLogin').close();$('#lp').value='';document.body.classList.add('admin');bar();render();toast('Modo edição ativado');
   }else $('#le').textContent='Usuário ou senha incorretos. Confira e tente de novo.'
 };
 $('#dLogin').addEventListener('keydown',e=>{if(e.key==='Enter')$('#lok').click()});
-$('#btnOut').onclick=()=>{if(dirty&&!confirm('Há alterações não publicadas. Sair mesmo assim?'))return;if(dirty){location.reload();return}document.body.classList.remove('admin');render()};
+$('#btnOut').onclick=()=>{if(dirty&&!confirm('Há alterações não publicadas. Sair mesmo assim?'))return;if(dirty){location.reload();return}document.body.classList.remove('admin');SESS_USER='';SESS_PASS='';render();syncFromRemote(false)};
 function touch(){dirty++;bar()}
 function bar(){$('#btnPub').disabled=!dirty;$('#barMsg').textContent=dirty?dirty+' alteração(ões) não publicada(s)':'Modo edição · tudo publicado'}
 $('#fc').innerHTML=state.cats.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
@@ -624,8 +654,18 @@ $('#fs').onclick=()=>{
 $('#btnPub').onclick=async()=>{
   const btn=$('#btnPub');btn.disabled=true;btn.textContent='Publicando…';
   try{
+    await pushRemoteMenu(SESS_USER,SESS_PASS,{cats:state.cats,items:state.items});
+    dirty=0;bar();btn.textContent='Publicar alterações';toast('Publicado! Já está valendo em todos os dispositivos.');return
+  }catch(err){
+    if(!/^http_|failed to fetch|networkerror/i.test(String(err&&err.message))){
+      btn.disabled=false;btn.textContent='Publicar alterações';
+      toast('Sessão expirada. Saia e entre de novo para publicar.');return
+    }
+    /* bloqueado (ex.: preview do claude.ai) ou fora do ar: tenta o modo antigo, restrito ao dono do link */
+  }
+  try{
     const a=await claude.use('artifact');
-    if(!a){toast('Publicação indisponível. Abra o link como dono do site.');btn.disabled=false;btn.textContent='Publicar alterações';return}
+    if(!a){toast('Publicação indisponível aqui. Abra o site publicado (fora do claude.ai) para publicar de qualquer dispositivo.');btn.disabled=false;btn.textContent='Publicar alterações';return}
     const c=document.documentElement.cloneNode(true);
     c.querySelector('#menu-data').textContent=JSON.stringify(state);
     c.querySelectorAll('[data-render]').forEach(e=>e.innerHTML='');
@@ -708,6 +748,7 @@ $$('.head,.unit,.fame,.panel').forEach(e=>e.classList.add('rv'));
 if('IntersectionObserver' in window){const io=new IntersectionObserver(es=>es.forEach(x=>{if(x.isIntersecting){x.target.classList.add('in');io.unobserve(x.target)}}),{threshold:.12});$$('.rv').forEach(e=>io.observe(e))}else $$('.rv').forEach(e=>e.classList.add('in'));
 $('#goSearch').addEventListener('click',()=>setTimeout(()=>$('#q').focus({preventScroll:true}),600));
 render();onScroll();
+syncFromRemote(false);setInterval(()=>syncFromRemote(true),25000);
 })();
 </script>
 </body>
